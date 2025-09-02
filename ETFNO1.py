@@ -180,7 +180,7 @@ def backtest_etf_rotation(etf_df, initial_capital=1000000):
 	# 创建调仓记录文件
 	with open('etf_rotation_log.txt', 'w', encoding='utf-8') as log_file:
 		log_file.write("ETF轮动策略调仓记录\n")
-		log_file.write("=" * 50 + "\n\n")
+		log_file.write("=" * 80 + "\n\n")
 		log_file.write("策略模式: 始终持仓，不空仓\n\n")
 
 	# 获取所有交易日
@@ -214,13 +214,14 @@ def backtest_etf_rotation(etf_df, initial_capital=1000000):
 
 		# 记录30日涨幅排名
 		with open('etf_rotation_log.txt', 'a', encoding='utf-8') as log_file:
-			log_file.write(f"日期: {current_date} 30日涨幅排名:\n")
-			for etf in etf_performance:
-				log_file.write(f"  {etf['code']}: {etf['thirty_day_return']:.2f}%\n")
+			log_file.write(f"日期: {current_date}\n")
+			log_file.write("-" * 80 + "\n")
+			log_file.write("30日涨幅排名:\n")
+			for rank, etf in enumerate(etf_performance, 1):
+				log_file.write(f"  {rank}. {etf['code']}: {etf['thirty_day_return']:.2f}%\n")
 			if top1 and top2:
-				log_file.write(f"排名第一: {top1['code']} (30日涨幅: {top1['thirty_day_return']:.2f}%)\n")
-				log_file.write(f"排名第二: {top2['code']} (30日涨幅: {top2['thirty_day_return']:.2f}%)\n")
-			log_file.write("=" * 50 + "\n\n")
+				log_file.write(f"目标持仓: {top1['code']} (排名第一), {top2['code']} (排名第二)\n")
+			log_file.write("-" * 80 + "\n\n")
 
 		# 循环每个30分钟K线
 		for j, current_time in enumerate(time_points):
@@ -241,7 +242,8 @@ def backtest_etf_rotation(etf_df, initial_capital=1000000):
 						'value': position_value,
 						'cost_value': position['shares'] * position['cost_price'],
 						'profit': position_value - (position['shares'] * position['cost_price']),
-						'profit_pct': (position_value / (position['shares'] * position['cost_price']) - 1) * 100
+						'profit_pct': (position_value / (position['shares'] * position['cost_price']) - 1) * 100,
+						'current_price': current_price
 					}
 
 			# 记录每个K线结束时的结果
@@ -253,26 +255,38 @@ def backtest_etf_rotation(etf_df, initial_capital=1000000):
 				'holdings': {code: pos['shares'] for code, pos in portfolio['holdings'].items()}
 			})
 
-			# 记录每个K线结束时的盈亏情况
+			# 记录每个K线结束时的盈亏情况和排名
 			with open('etf_rotation_log.txt', 'a', encoding='utf-8') as log_file:
-				log_file.write(f"日期: {current_date} 时间: {current_time} (K线结束)\n")
+				log_file.write(f"日期: {current_date} 时间: {current_time}\n")
 				log_file.write(f"投资组合总价值: {portfolio_value:.2f}\n")
 				log_file.write(f"现金: {portfolio['cash']:.2f}\n")
 
-				for code, position in portfolio['holdings'].items():
-					if code in position_values:
-						log_file.write(f"{code}: {position['shares']} 股, 成本价: {position['cost_price']:.4f}, "
-									   f"当前价: {position_values[code]['value'] / position['shares']:.4f}, "
-									   f"盈亏: {position_values[code]['profit']:.2f} ({position_values[code]['profit_pct']:.2f}%)\n")
+				# 记录当前持仓
+				if portfolio['holdings']:
+					log_file.write("当前持仓:\n")
+					for code, position in portfolio['holdings'].items():
+						if code in position_values:
+							log_file.write(f"  {code}: {position['shares']} 股, "
+										   f"成本价: {position['cost_price']:.4f}, "
+										   f"当前价: {position_values[code]['current_price']:.4f}, "
+										   f"盈亏: {position_values[code]['profit']:.2f} "
+										   f"({position_values[code]['profit_pct']:.2f}%)\n")
+				else:
+					log_file.write("当前持仓: 无\n")
 
-				log_file.write("-" * 30 + "\n")
+				# 记录当前排名
+				log_file.write("当前30日涨幅排名:\n")
+				for rank, etf in enumerate(etf_performance[:5], 1):  # 只显示前5名
+					log_file.write(f"  {rank}. {etf['code']}: {etf['thirty_day_return']:.2f}%\n")
+
+				log_file.write("-" * 80 + "\n")
 
 			# 如果不是最后一个K线，执行调仓
 			if j < len(time_points) - 1:
 				next_time = time_points[j + 1]
 
 				with open('etf_rotation_log.txt', 'a', encoding='utf-8') as log_file:
-					log_file.write(f"日期: {current_date} 时间: {current_time} (执行调仓)\n")
+					log_file.write(f"日期: {current_date} 时间: {current_time} -> 调仓操作\n")
 
 					# 检查当前持仓是否需要调整
 					current_codes = set(portfolio['holdings'].keys())
@@ -282,12 +296,38 @@ def backtest_etf_rotation(etf_df, initial_capital=1000000):
 					if top2:
 						target_codes.add(top2['code'])
 
+					# 记录目标持仓
+					log_file.write(f"目标持仓: {', '.join(target_codes) if target_codes else '无'}\n")
+
 					# 如果当前持仓与目标持仓一致，则不需要调仓
 					if current_codes == target_codes and len(target_codes) > 0:
 						log_file.write("持仓与目标一致，无需调仓\n")
-						log_file.write(f"现金余额: {portfolio['cash']:.2f}\n")
-						log_file.write("=" * 50 + "\n\n")
+						log_file.write("-" * 80 + "\n\n")
 						continue
+
+					# 记录切换情况
+					if current_codes:
+						log_file.write(f"当前持仓: {', '.join(current_codes)}\n")
+						if target_codes:
+							to_sell = current_codes - target_codes
+							to_buy = target_codes - current_codes
+
+							if to_sell:
+								log_file.write(f"需要卖出的ETF: {', '.join(to_sell)}\n")
+							if to_buy:
+								log_file.write(f"需要买入的ETF: {', '.join(to_buy)}\n")
+
+							if not to_sell and not to_buy:
+								log_file.write("持仓与目标一致，无需调仓\n")
+							else:
+								log_file.write("执行调仓操作:\n")
+						else:
+							log_file.write("无目标持仓，清空所有持仓\n")
+					else:
+						log_file.write("当前无持仓\n")
+						if target_codes:
+							log_file.write(f"需要买入的ETF: {', '.join(target_codes)}\n")
+							log_file.write("执行建仓操作:\n")
 
 					# 清空所有现有持仓（使用下一条K线的开盘价）
 					for code in list(portfolio['holdings'].keys()):
@@ -296,9 +336,11 @@ def backtest_etf_rotation(etf_df, initial_capital=1000000):
 												 (etf_df['trade_time'] == next_time)]
 						if len(open_price_data) > 0:
 							open_price = open_price_data['open_price'].values[0]
-							portfolio['cash'] += portfolio['holdings'][code]['shares'] * open_price
+							sale_value = portfolio['holdings'][code]['shares'] * open_price
+							portfolio['cash'] += sale_value
 							log_file.write(
-								f"卖出 {code}: {portfolio['holdings'][code]['shares']} 股 @ {open_price:.4f}\n")
+								f"  卖出 {code}: {portfolio['holdings'][code]['shares']} 股 @ {open_price:.4f} "
+								f"(价值: {sale_value:.2f})\n")
 							del portfolio['holdings'][code]
 
 					# 执行新计划：买入排名前两的ETF
@@ -326,22 +368,26 @@ def backtest_etf_rotation(etf_df, initial_capital=1000000):
 									'shares': shares1,
 									'cost_price': price1
 								}
+								cost1 = shares1 * price1
+								log_file.write(
+									f"  买入 {top1['code']}: {shares1} 股 @ {price1:.4f} (成本: {cost1:.2f})\n")
+
 							if shares2 > 0:
 								portfolio['holdings'][top2['code']] = {
 									'shares': shares2,
 									'cost_price': price2
 								}
+								cost2 = shares2 * price2
+								log_file.write(
+									f"  买入 {top2['code']}: {shares2} 股 @ {price2:.4f} (成本: {cost2:.2f})\n")
 
 							# 剩余现金
 							portfolio['cash'] = total_value - (shares1 * price1 + shares2 * price2)
-
-							log_file.write(f"买入 {top1['code']}: {shares1} 股 @ {price1:.4f}\n")
-							log_file.write(f"买入 {top2['code']}: {shares2} 股 @ {price2:.4f}\n")
 					else:
-						log_file.write("操作: 无操作 (数据不足)\n")
+						log_file.write("无法执行买入操作: 数据不足\n")
 
-					log_file.write(f"现金余额: {portfolio['cash']:.2f}\n")
-					log_file.write("=" * 50 + "\n\n")
+					log_file.write(f"调仓后现金余额: {portfolio['cash']:.2f}\n")
+					log_file.write("=" * 80 + "\n\n")
 
 		# 如果资金归零，提前结束回测
 		if portfolio_value <= 0:
@@ -400,7 +446,7 @@ if len(results_df) > 0 and results_df.iloc[-1]['portfolio_value'] > 0:
 	print(f"最大回撤: {max_drawdown * 100:.2f}%")
 	print(f"回测期间: {results_df.iloc[0]['date']} 到 {results_df.iloc[-1]['date']}")
 	print(f"策略模式: 始终持仓，不空仓")
-	print(f"调仓记录已保存到 etf_rotation_log.txt")
+	print(f"详细调仓记录已保存到 etf_rotation_log.txt")
 
 	# 计算夏普比率
 	daily_returns = results_df['portfolio_value'].pct_change().dropna()
