@@ -4,6 +4,9 @@ import numpy as np
 from datetime import datetime, timedelta
 from pytdx.hq import TdxHq_API
 import logging
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
+from matplotlib.ticker import FuncFormatter
 
 # 设置日志 - 文件日志记录所有信息，控制台只记录关键信息
 file_handler = logging.FileHandler("etf_backtest.log", encoding='utf-8')
@@ -54,6 +57,7 @@ etf_codes = [
 	('511090', 1)
 ]
 
+
 # 获取ETF 30分钟K线数据并存入数据库
 def fetch_etf_30min_data():
 	api = TdxHq_API()
@@ -63,7 +67,7 @@ def fetch_etf_30min_data():
 			print(f"正在获取 {code} 的30分钟K线数据...")
 			data = []
 
-			# 获取30分钟K线数据 (周期参数为5)
+			# 获取30分钟K线数据 (周期参数为2表示30分钟K线)
 			pages = 25  # 获取大约25页数据，约20000条
 
 			for i in range(pages):
@@ -74,22 +78,66 @@ def fetch_etf_30min_data():
 			# 转换为DataFrame
 			df = api.to_df(data)
 
+			# 打印数据结构以便调试
+			print(f"ETF {code} 的数据结构:")
+			print(f"列名: {df.columns.tolist()}")
+			print(f"前几行数据:\n{df.head()}")
+
 			# 处理数据
 			df['code'] = code
-			df['trade_date'] = pd.to_datetime(df['datetime']).dt.date
-			df['trade_time'] = pd.to_datetime(df['datetime']).dt.time
-			df.rename(columns={
-				'open': 'open_price',
-				'close': 'close_price',
-				'high': 'high_price',
-				'low': 'low_price',
-				'vol': 'volume',
-				'amount': 'amount'
-			}, inplace=True)
+
+			# 根据实际数据结构处理日期时间
+			if 'datetime' in df.columns:
+				df['trade_date'] = pd.to_datetime(df['datetime']).dt.date
+				df['trade_time'] = pd.to_datetime(df['datetime']).dt.time
+			elif 'date' in df.columns and 'time' in df.columns:
+				# 如果有date和time列，组合它们
+				df['trade_date'] = pd.to_datetime(df['date']).dt.date
+				df['trade_time'] = pd.to_datetime(df['time'], format='%H%M').dt.time
+			else:
+				# 如果都没有，尝试使用year, month, day, hour, minute列
+				if all(col in df.columns for col in ['year', 'month', 'day', 'hour', 'minute']):
+					df['datetime'] = pd.to_datetime(
+						df['year'].astype(str) + '-' +
+						df['month'].astype(str) + '-' +
+						df['day'].astype(str) + ' ' +
+						df['hour'].astype(str) + ':' +
+						df['minute'].astype(str)
+					)
+					df['trade_date'] = df['datetime'].dt.date
+					df['trade_time'] = df['datetime'].dt.time
+				else:
+					# 最后尝试使用索引作为时间
+					print(f"警告: ETF {code} 的数据中没有找到日期时间列，使用索引作为时间")
+					start_date = datetime.now() - timedelta(days=len(df) * 30 / 60 / 24)
+					df['datetime'] = pd.date_range(start=start_date, periods=len(df), freq='30min')
+					df['trade_date'] = df['datetime'].dt.date
+					df['trade_time'] = df['datetime'].dt.time
+
+			# 重命名列
+			column_mapping = {}
+			if 'open' in df.columns:
+				column_mapping['open'] = 'open_price'
+			if 'close' in df.columns:
+				column_mapping['close'] = 'close_price'
+			if 'high' in df.columns:
+				column_mapping['high'] = 'high_price'
+			if 'low' in df.columns:
+				column_mapping['low'] = 'low_price'
+			if 'vol' in df.columns:
+				column_mapping['vol'] = 'volume'
+			if 'amount' in df.columns:
+				column_mapping['amount'] = 'amount'
+
+			df.rename(columns=column_mapping, inplace=True)
 
 			# 选择需要的列
-			df = df[['code', 'trade_date', 'trade_time', 'open_price', 'close_price',
-					 'high_price', 'low_price', 'volume', 'amount']]
+			available_columns = ['code', 'trade_date', 'trade_time']
+			for col in ['open_price', 'close_price', 'high_price', 'low_price', 'volume', 'amount']:
+				if col in df.columns:
+					available_columns.append(col)
+
+			df = df[available_columns]
 
 			# 删除重复数据
 			df = df.drop_duplicates(subset=['code', 'trade_date', 'trade_time'])
@@ -97,27 +145,104 @@ def fetch_etf_30min_data():
 			# 存入数据库
 			for _, row in df.iterrows():
 				try:
-					conn.execute(f"""
-                        INSERT INTO etf_data_30min 
-                        (code, trade_date, trade_time, open_price, close_price, 
-                         high_price, low_price, volume, amount)
-                        VALUES (
-                            '{row['code']}', 
-                            '{row['trade_date']}', 
-                            '{row['trade_time']}', 
-                            {row['open_price']}, 
-                            {row['close_price']}, 
-                            {row['high_price']}, 
-                            {row['low_price']}, 
-                            {row['volume']}, 
-                            {row['amount']}
-                        )
-                    """)
+					# 构建SQL插入语句
+					columns = []
+					values = []
+
+					if 'code' in df.columns:
+						columns.append('code')
+						values.append(f"'{row['code']}'")
+					if 'trade_date' in df.columns:
+						columns.append('trade_date')
+						values.append(f"'{row['trade_date']}'")
+					if 'trade_time' in df.columns:
+						columns.append('trade_time')
+						values.append(f"'{row['trade_time']}'")
+					if 'open_price' in df.columns:
+						columns.append('open_price')
+						values.append(f"{row['open_price']}")
+					if 'close_price' in df.columns:
+						columns.append('close_price')
+						values.append(f"{row['close_price']}")
+					if 'high_price' in df.columns:
+						columns.append('high_price')
+						values.append(f"{row['high_price']}")
+					if 'low_price' in df.columns:
+						columns.append('low_price')
+						values.append(f"{row['low_price']}")
+					if 'volume' in df.columns:
+						columns.append('volume')
+						values.append(f"{row['volume']}")
+					if 'amount' in df.columns:
+						columns.append('amount')
+						values.append(f"{row['amount']}")
+
+					if columns:
+						sql = f"""
+                            INSERT INTO etf_data_30min 
+                            ({', '.join(columns)})
+                            VALUES ({', '.join(values)})
+                        """
+						conn.execute(sql)
 				except Exception as e:
 					print(f"插入数据时出错: {e}")
 					continue
 
 	print("所有ETF 30分钟K线数据获取完成并已存入数据库")
+
+
+# 绘制盈亏曲线
+def plot_profit_curve(portfolio_value, initial_cash):
+	# 提取时间和价值
+	times = [pv[0] for pv in portfolio_value]
+	values = [pv[1] for pv in portfolio_value]
+
+	# 计算收益率
+	returns = [(v - initial_cash) / initial_cash * 100 for v in values]
+
+	# 创建图表
+	fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10))
+
+	# 绘制资产曲线
+	ax1.plot(times, values, 'b-', linewidth=2)
+	ax1.set_title('Portfolio Value Over Time')
+	ax1.set_ylabel('Portfolio Value (¥)')
+	ax1.grid(True)
+
+	# 设置y轴格式为货币格式
+	formatter = FuncFormatter(lambda x, p: f'¥{x:,.0f}')
+	ax1.yaxis.set_major_formatter(formatter)
+
+	# 绘制收益率曲线
+	ax2.plot(times, returns, 'g-', linewidth=2)
+	ax2.set_title('Portfolio Return (%)')
+	ax2.set_xlabel('Time')
+	ax2.set_ylabel('Return (%)')
+	ax2.grid(True)
+
+	# 添加零线
+	ax2.axhline(y=0, color='r', linestyle='--', alpha=0.7)
+
+	# 设置日期格式
+	for ax in [ax1, ax2]:
+		ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
+		ax.xaxis.set_major_locator(mdates.MonthLocator())
+		plt.setp(ax.xaxis.get_majorticklabels(), rotation=45)
+
+	plt.tight_layout()
+	plt.savefig('profit_curve.png', dpi=300)
+	plt.show()
+
+	# 打印统计信息
+	final_return = returns[-1] if returns else 0
+	max_return = max(returns) if returns else 0
+	min_return = min(returns) if returns else 0
+
+	print(f"\n=== 盈亏曲线统计 ===")
+	print(f"最终收益率: {final_return:.2f}%")
+	print(f"最高收益率: {max_return:.2f}%")
+	print(f"最低收益率: {min_return:.2f}%")
+	print(f"盈亏曲线已保存为 profit_curve.png")
 
 
 # 回测函数
@@ -290,6 +415,9 @@ def backtest_strategy():
 
 	# 打印交易统计
 	logger.warning(f"总交易次数: {len(trade_log)}")
+
+	# 绘制盈亏曲线
+	plot_profit_curve(portfolio_value, initial_cash)
 
 	return trade_log, portfolio_value, returns_history
 
