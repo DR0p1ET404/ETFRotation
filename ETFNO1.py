@@ -67,7 +67,7 @@ def fetch_etf_30min_data():
 			pages = 25  # 获取大约25页数据，约20000条
 
 			for i in range(pages):
-				chunk = api.get_security_bars(2, market, code, i * 800, 800)
+				chunk = api.get_security_bars(0, market, code, i * 800, 800)
 				if chunk:
 					data.extend(chunk)
 
